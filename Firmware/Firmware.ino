@@ -1,32 +1,11 @@
+#include "Config.h"
+
 // TCP server
-#include <ESP8266WiFi.h>
-#define SSID "Jacob Robot"
-#define PASS "paralelepipedo"
-#define PORT 1963
-WiFiServer tcpServer(PORT);
+WiFiServer tcpServer(ROBOT_PORT);
 WiFiClient client;
 
-// control de motores
-#define PIN_M1_SPEED D1
-#define PIN_M1_DIR D3
-#define PIN_M2_SPEED D2
-#define PIN_M2_DIR D4  // lo usa el LED_BUILTIN
-
-// para emitir sonidos
-#define PIN_BUZZER D5
-
-// comandos del robot
-#define CMD_MOTORS 'M'  // Control de los motores
-#define CMD_PING 'P'    // Ping
-#define CMD_BEEP 'B'    // Beep
-#define CMD_INFO 'I'    // Version
-#define CMD_LED 'L'     // LED
-
-#define PACKET_LENGTH 8      // Tamaño comando
-byte packet[PACKET_LENGTH];  // Comando recibido
-
-// quien soy
-const char *INFO_TEXT = "Jacob Robot V1.0\n";
+byte packet[PACKET_LENGTH];                    // comando recibido
+const char *INFO_TEXT = "Jacob Robot V1.0\n";  // quien soy
 
 void setup() {
   // para debug
@@ -46,100 +25,122 @@ void setup() {
   // el buzzer
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, 0);
-
-  // access point
-  Serial.print("\n\nConfigurando Punto de Acceso ... ");
-  Serial.flush();
-  WiFi.softAP(SSID, PASS);
-  Serial.println("OK");
-  Serial.print("Nombre de la red (SSID): ");
-  Serial.println(SSID);
-  Serial.print("Clave de acceso: ");
-  Serial.println(PASS);
-  Serial.flush();
-
-  // iniciamos el servidor TCP
-  tcpServer.begin();
-
-  // show time
-  Serial.println("\n\n");
-  Serial.println("Jacob Robot Ready.");
-  Serial.flush();
-
-  beep(440, 500);
-  delay(100);
-  beep(440, 500);
 }
 
 void loop() {
+  // quizas debemos reconectarnos
+  if (WiFi.status() != WL_CONNECTED) {
+    while (!initWIFI()) {}
+
+    // tratamos de anunciar el nombre
+    if (MDNS.begin(ROBOT_NAME))
+      Serial.println("Servicio mDNS iniciado.");
+    else
+      Serial.println("Error al iniciar mDNS.");
+    Serial.flush();
+    MDNS.update();
+
+    // iniciamos el servidor TCP
+    tcpServer.begin();
+
+    Serial.println("Jacob Robot Ready.");
+    Serial.flush();
+    beep(440, 500);
+    delay(100);
+    beep(440, 500);
+  }
+
   // esperamos por conexiones entrantes
-  IPAddress myIP = WiFi.softAPIP();
-  Serial.print("Escuchando comandos en: ");
+  IPAddress myIP = WiFi.localIP();
+  Serial.print("\nEscuchando comandos en: ");
   Serial.print(myIP);
   Serial.print(":");
-  Serial.println(PORT);
+  Serial.println(ROBOT_PORT);
   Serial.flush();
 
   while (true) {
-    // recibimos una conexion
+    if (WiFi.status() != WL_CONNECTED)
+      return;
+    MDNS.update();
     client = tcpServer.available();
-    if (client) {
-      Serial.println("Cliente conectado.");
-      Serial.flush();
+    if (client) break;
+  }
 
-      while (client.connected()) {
-        // esperamos un comando
-        if (!getPacket()) {
-          delay(100);
-          continue;
+  // procesamos la conexion
+  Serial.println("Cliente conectado.");
+  Serial.flush();
+
+  while (client.connected()) {
+    MDNS.update();
+
+    // esperamos un comando
+    if (!getPacket())
+      continue;
+
+    // procesamos el comando
+    switch (packet[0]) {
+      case CMD_MOTORS:
+        {
+          setMotor(packet[1], packet[2], packet[3], packet[4]);
         }
-
-        // procesamos el comando
-        switch (packet[0]) {
-          case CMD_MOTORS:
-            {
-              setMotor(packet[1], packet[2], packet[3], packet[4]);
-            }
-            break;
-          case CMD_PING:
-            {
-              /*
+        break;
+      case CMD_PING:
+        {
+          /*
               unsigned int max_distance = packet[1] * 256 + packet[2];
               unsigned int d = ping.ping(max_distance);
               */
-              unsigned int d = 0;
-              client.write('$');
-              client.write((d >> 8) & 0xFF);
-              client.write(d & 0xFF);
-              client.write('#');
-              client.flush();
-            }
-            break;
-          case CMD_BEEP:
-            {
-              unsigned long frec = packet[1] * 256 + packet[2];
-              unsigned long duracion = packet[3] * 256 + packet[4];
-              beep(frec, duracion);
-            }
-            break;
-          case CMD_INFO:
-            {
-              client.print(INFO_TEXT);
-              client.flush();
-            }
-            break;
-          case CMD_LED:
-            break;
+          unsigned int d = 0;
+          client.write('$');
+          client.write((d >> 8) & 0xFF);
+          client.write(d & 0xFF);
+          client.write('#');
+          client.flush();
         }
-        delay(10);
-      }
-      client.stop();
-
-      Serial.println("Cliente desconectado.");
-      Serial.flush();
+        break;
+      case CMD_BEEP:
+        {
+          unsigned long frec = packet[1] * 256 + packet[2];
+          unsigned long duracion = packet[3] * 256 + packet[4];
+          beep(frec, duracion);
+        }
+        break;
+      case CMD_INFO:
+        {
+          client.print(INFO_TEXT);
+          client.flush();
+        }
+        break;
+      case CMD_LED:
+        break;
     }
-    delay(100);
+    delay(10);
   }
+  client.stop();
+
+  Serial.println("Cliente desconectado.");
+  Serial.flush();
+}
+
+bool initWIFI() {
+  Serial.print("\nConectando a la WIFI: .");
+  Serial.flush();
+  WiFi.disconnect();
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    Serial.flush();
+    if (millis() - t > 15000) {
+      Serial.println(" Error");
+      Serial.flush();
+      return false;
+    }
+    delay(500);
+  }
+  Serial.println("OK");
+  Serial.flush();
+  return true;
 }
 
 void setMotor(char m1_dir, uint8_t m1_power, char m2_dir, uint8_t m2_power) {

@@ -8,8 +8,8 @@ from JacobRobot import JacobRobot
 
 
 class Test:
-    def __init__(self, debug=False):
-        self.rob = JacobRobot("192.168.4.1", 1963, debug=debug)
+    def __init__(self, host, port, debug=False):
+        self.rob = JacobRobot(host, port, debug=debug)
         print("Pruebas de RoboBase", flush=True)
         print("-------------------", flush=True)
 
@@ -67,7 +67,7 @@ class Test:
 
 
 # --- show time ---
-app = Test(True)
+app = Test("jacobrobot.local", 1963, True)
 app.test_info()
 app.test_beep(0.5)
 # app.test_ping(25, 10)
